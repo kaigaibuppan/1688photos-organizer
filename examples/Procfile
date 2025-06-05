@@ -1,0 +1,4 @@
+cat > Procfile << 'EOF'
+web: python examples/web_interface.py
+worker: python examples/example_usage.py
+EOF

@@ -1,0 +1,11 @@
+cat > railway.toml << 'EOF'
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "python examples/example_usage.py"
+healthcheckPath = "/"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+EOF
