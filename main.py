@@ -117,17 +117,6 @@ def extract_1688_images(url, max_images=20):
                             if clean_url:
                                 image_urls.add(clean_url)
         
-        # 方法3: CSS background-image から抽出
-        style_elements = soup.find_all(['div', 'span'], style=True)
-        for elem in style_elements:
-            style = elem.get('style', '')
-            bg_matches = re.findall(r'background-image:\s*url\(["\']?([^"\']*alicdn\.com[^"\']*)["\']?\)', style)
-            for match in bg_matches:
-                if is_valid_product_image(match):
-                    clean_url = clean_image_url(match)
-                    if clean_url:
-                        image_urls.add(clean_url)
-        
         # 結果を処理
         image_list = list(image_urls)[:max_images]
         
@@ -159,7 +148,30 @@ def extract_1688_images(url, max_images=20):
         logger.error(f"❌ Request error: {e}")
         return {'success': False, 'error': f'ページの取得に失敗しました: {str(e)}'}
     except Exception as e:
-        logger.error(f"❌ Extraction error: {e}")
+        logger.error(f"❌ API Error: {e}")
+        return jsonify({
+            'success': False, 
+            'error': f'サーバーエラー: {str(e)}'
+        })
+
+@app.route('/health')
+def health():
+    return jsonify({
+        'status': 'healthy',
+        'app': '1688 Photos Organizer - Debug Version',
+        'version': '4.1.0',
+        'features': ['real_scraping', 'image_enhancement', 'debug_mode']
+    })
+
+if __name__ == '__main__':
+    # Railway用のポート設定
+    port = int(os.environ.get('PORT', 5000))
+    
+    logger.info(f"🚀 Starting 1688 Real Image Extractor - Debug Version")
+    logger.info(f"🌐 Port: {port}")
+    logger.info(f"🔧 Debug mode enabled for troubleshooting")
+    
+    app.run(host='0.0.0.0', port=port, debug=False)error(f"❌ Extraction error: {e}")
         return {'success': False, 'error': f'画像抽出エラー: {str(e)}'}
 
 def is_valid_product_image(url):
@@ -291,7 +303,7 @@ HTML_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚀 1688 商品画像抽出ツール - 完全版</title>
+    <title>🚀 1688 商品画像抽出ツール - デバッグ版</title>
     <style>
         body { 
             font-family: Arial, sans-serif; 
@@ -313,6 +325,15 @@ HTML_TEMPLATE = '''
             text-align: center; 
             margin-bottom: 30px;
         }
+        .debug-panel {
+            background: #e7f3ff;
+            border: 1px solid #b3d4fc;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-family: monospace;
+            font-size: 12px;
+        }
         .success-banner {
             background: linear-gradient(45deg, #28a745, #20c997);
             color: white;
@@ -321,21 +342,6 @@ HTML_TEMPLATE = '''
             margin-bottom: 25px;
             text-align: center;
             font-weight: bold;
-        }
-        .improvement-notice {
-            background: linear-gradient(45deg, #ffc107, #ff8c00);
-            color: white;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-        .feature-card {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 12px;
-            margin: 15px 0;
-            border-left: 4px solid #667eea;
         }
         .form-group { 
             margin-bottom: 20px; 
@@ -346,7 +352,7 @@ HTML_TEMPLATE = '''
             font-weight: bold; 
             color: #555;
         }
-        input, textarea, select { 
+        input, select { 
             width: 100%; 
             padding: 12px; 
             border: 2px solid #ddd; 
@@ -495,41 +501,30 @@ HTML_TEMPLATE = '''
 <body>
     <div class="container">
         <div class="success-banner">
-            ✅ 実際の1688画像スクレイピング機能搭載！完全修正版
+            ✅ 1688画像抽出ツール - デバッグ版（問題診断中）
         </div>
         
-        <div class="improvement-notice">
-            🔥 修正完了！URLリセット問題を解決、サムネイル表示とクリック機能を改善
+        <div class="debug-panel" id="debugPanel">
+            📝 デバッグ情報: ページ読み込み完了<br>
+            📅 現在時刻: <span id="currentTime"></span><br>
+            🔧 JavaScript状態: 初期化中...
         </div>
         
-        <h1>🚀 1688 商品画像抽出ツール - 完全版</h1>
-        
-        <div class="feature-card">
-            <h3>🎯 修正・改良点</h3>
-            <ul>
-                <li>✅ URLリセット問題を完全修正</li>
-                <li>✅ 指定枚数での確実なサムネイル表示</li>
-                <li>✅ クリック時の画像単体ページ表示（別タブ）</li>
-                <li>✅ 高解像度画像の自動変換（800x800対応）</li>
-                <li>✅ リアルタイム抽出進行状況表示</li>
-                <li>✅ 詳細な統計パネル</li>
-            </ul>
-        </div>
+        <h1>🚀 1688 商品画像抽出ツール - デバッグ版</h1>
         
         <form id="extractForm">
             <div class="form-group">
                 <label>🔗 1688商品URL:</label>
                 <input type="url" id="productUrl" 
-                       placeholder="https://detail.1688.com/offer/806521859635.html?..." 
+                       placeholder="https://detail.1688.com/offer/806521859635.html" 
                        value="https://detail.1688.com/offer/806521859635.html"
                        required>
-                <small style="color: #666;">例: detail.1688.com/offer/任意の商品ID</small>
             </div>
             
             <div style="display: flex; gap: 20px;">
                 <div class="form-group" style="flex: 1;">
                     <label>📊 抽出枚数:</label>
-                    <input type="number" id="maxImages" value="15" min="1" max="50">
+                    <input type="number" id="maxImages" value="10" min="1" max="30">
                 </div>
                 <div class="form-group" style="flex: 1;">
                     <label>🖼️ 画質設定:</label>
@@ -541,7 +536,7 @@ HTML_TEMPLATE = '''
                 </div>
             </div>
             
-            <button type="submit" id="submitBtn">🚀 実際の画像を抽出開始</button>
+            <button type="submit" id="submitBtn">🚀 画像抽出開始（デバッグ版）</button>
         </form>
         
         <div id="result" class="result" style="display:none;">
@@ -551,60 +546,111 @@ HTML_TEMPLATE = '''
     </div>
 
     <script>
-        document.getElementById('extractForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const url = document.getElementById('productUrl').value.trim();
-            const maxImages = parseInt(document.getElementById('maxImages').value);
-            const quality = document.getElementById('quality').value;
-            const submitBtn = document.getElementById('submitBtn');
-            const resultDiv = document.getElementById('result');
-            const resultContent = document.getElementById('resultContent');
-            
-            // 1688 URL validation
-            if (!url.includes('1688.com')) {
-                alert('1688.comのURLを入力してください');
-                return;
+        // デバッグ用ログ関数
+        function debugLog(message) {
+            console.log('[DEBUG] ' + message);
+            const debugPanel = document.getElementById('debugPanel');
+            if (debugPanel) {
+                debugPanel.innerHTML += '<br>🔧 ' + new Date().toLocaleTimeString() + ': ' + message;
             }
+        }
+        
+        // ページ読み込み完了時
+        document.addEventListener('DOMContentLoaded', function() {
+            debugLog('DOM完全読み込み完了');
             
-            // UI更新
-            submitBtn.disabled = true;
-            submitBtn.textContent = '🔄 抽出中...';
-            resultDiv.style.display = 'block';
-            resultContent.innerHTML = '<div class="loading">実際の1688ページから画像を抽出中...</div>';
+            // 現在時刻表示
+            document.getElementById('currentTime').textContent = new Date().toLocaleString();
             
-            try {
-                console.log('Starting extraction for:', url);
+            // フォーム要素確認
+            const form = document.getElementById('extractForm');
+            const submitBtn = document.getElementById('submitBtn');
+            const urlInput = document.getElementById('productUrl');
+            
+            debugLog('フォーム要素確認: form=' + (form ? 'OK' : 'NG') + 
+                    ', submitBtn=' + (submitBtn ? 'OK' : 'NG') + 
+                    ', urlInput=' + (urlInput ? 'OK' : 'NG'));
+            
+            if (form) {
+                debugLog('フォームイベントリスナー設定開始');
                 
-                const response = await fetch('/extract', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        url: url,
-                        max_images: maxImages,
-                        quality: quality
+                form.addEventListener('submit', function(e) {
+                    debugLog('フォーム送信イベント発生！');
+                    e.preventDefault();
+                    
+                    const url = document.getElementById('productUrl').value.trim();
+                    const maxImages = parseInt(document.getElementById('maxImages').value);
+                    const quality = document.getElementById('quality').value;
+                    
+                    debugLog('取得したパラメータ: URL=' + url + ', maxImages=' + maxImages + ', quality=' + quality);
+                    
+                    // 1688 URL validation
+                    if (!url.includes('1688.com')) {
+                        debugLog('URLバリデーションエラー: 1688.comが含まれていない');
+                        alert('1688.comのURLを入力してください');
+                        return;
+                    }
+                    
+                    debugLog('URLバリデーション成功、抽出処理開始');
+                    
+                    // UI更新
+                    const submitBtn = document.getElementById('submitBtn');
+                    const resultDiv = document.getElementById('result');
+                    const resultContent = document.getElementById('resultContent');
+                    
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = '🔄 抽出中...';
+                    resultDiv.style.display = 'block';
+                    resultContent.innerHTML = '<div class="loading">実際の1688ページから画像を抽出中...</div>';
+                    
+                    debugLog('UI更新完了、APIリクエスト送信開始');
+                    
+                    // APIリクエスト
+                    fetch('/extract', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            url: url,
+                            max_images: maxImages,
+                            quality: quality
+                        })
                     })
+                    .then(response => {
+                        debugLog('APIレスポンス受信: status=' + response.status);
+                        return response.json();
+                    })
+                    .then(data => {
+                        debugLog('JSON解析完了: success=' + data.success + ', images=' + (data.images ? data.images.length : 0));
+                        
+                        if (data.success && data.images && data.images.length > 0) {
+                            displayResults(data);
+                        } else {
+                            resultContent.innerHTML = '<div class="error-box">❌ ' + (data.error || '画像が見つかりませんでした') + '</div>';
+                        }
+                    })
+                    .catch(error => {
+                        debugLog('APIエラー: ' + error.message);
+                        console.error('Error:', error);
+                        resultContent.innerHTML = '<div class="error-box">❌ 抽出エラー: ' + error.message + '</div>';
+                    })
+                    .finally(() => {
+                        debugLog('処理完了、UI復元');
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = '🚀 画像抽出開始（デバッグ版）';
+                    });
                 });
                 
-                const data = await response.json();
-                console.log('Response:', data);
-                
-                if (data.success && data.images && data.images.length > 0) {
-                    displayResults(data);
-                } else {
-                    resultContent.innerHTML = '<div class="error-box">❌ ' + (data.error || '画像が見つかりませんでした') + '</div>';
-                }
-                
-            } catch (error) {
-                console.error('Error:', error);
-                resultContent.innerHTML = '<div class="error-box">❌ 抽出エラー: ' + error.message + '</div>';
-            } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = '🚀 実際の画像を抽出開始';
+                debugLog('フォームイベントリスナー設定完了');
+            } else {
+                debugLog('エラー: フォーム要素が見つかりません');
             }
         });
         
         function displayResults(data) {
+            debugLog('結果表示開始: ' + data.extracted_count + '枚の画像');
+            
             const resultContent = document.getElementById('resultContent');
             
             let html = '<div class="success-box">✅ ' + data.extracted_count + '枚の画像を抽出しました</div>';
@@ -636,13 +682,16 @@ HTML_TEMPLATE = '''
             html += '</div>';
             
             resultContent.innerHTML = html;
+            debugLog('結果表示完了');
         }
         
         function openImageInNewTab(imageUrl) {
+            debugLog('画像クリック: ' + imageUrl);
             window.open(imageUrl, '_blank');
         }
         
         function downloadImage(url, filename) {
+            debugLog('ダウンロード開始: ' + filename);
             const link = document.createElement('a');
             link.href = url;
             link.download = filename + '.jpg';
@@ -651,14 +700,6 @@ HTML_TEMPLATE = '''
             link.click();
             document.body.removeChild(link);
         }
-        
-        // ページ読み込み時の初期設定
-        document.addEventListener('DOMContentLoaded', function() {
-            const urlInput = document.getElementById('productUrl');
-            if (!urlInput.value) {
-                urlInput.value = 'https://detail.1688.com/offer/806521859635.html';
-            }
-        });
     </script>
 </body>
 </html>
@@ -670,23 +711,33 @@ def index():
 
 @app.route('/extract', methods=['POST'])
 def extract():
-    """実際の1688画像抽出API - 修正版エンドポイント"""
+    """実際の1688画像抽出API - デバッグ版"""
+    logger.info("📥 /extract エンドポイントにPOSTリクエスト受信")
+    
     try:
         data = request.get_json()
+        logger.info(f"📋 受信データ: {data}")
+        
         url = data.get('url', '').strip()
         max_images = int(data.get('max_images', 15))
         quality = data.get('quality', 'high')
         
+        logger.info(f"🔍 パラメータ解析: URL={url}, max_images={max_images}, quality={quality}")
+        
         if not url:
+            logger.warning("❌ URLが空です")
             return jsonify({'success': False, 'error': 'URLが必要です'})
         
         if '1688.com' not in url:
+            logger.warning(f"❌ 無効なURL: {url}")
             return jsonify({'success': False, 'error': '1688.comのURLを入力してください'})
         
-        logger.info(f"🚀 Starting extraction for: {url}")
+        logger.info(f"🚀 画像抽出開始: {url}")
         
         # 実際の画像抽出実行
         result = extract_1688_images(url, max_images)
+        
+        logger.info(f"🔚 抽出結果: success={result['success']}, images={result.get('extracted_count', 0)}")
         
         if result['success']:
             return jsonify({
@@ -702,27 +753,4 @@ def extract():
             return jsonify(result)
         
     except Exception as e:
-        logger.error(f"❌ API Error: {e}")
-        return jsonify({
-            'success': False, 
-            'error': f'サーバーエラー: {str(e)}'
-        })
-
-@app.route('/health')
-def health():
-    return jsonify({
-        'status': 'healthy',
-        'app': '1688 Photos Organizer - Complete Fixed Version',
-        'version': '4.0.0',
-        'features': ['real_scraping', 'image_enhancement', 'quality_filtering', 'fixed_ui']
-    })
-
-if __name__ == '__main__':
-    # Railway用のポート設定
-    port = int(os.environ.get('PORT', 5000))
-    
-    logger.info(f"🚀 Starting 1688 Real Image Extractor - Complete Fixed Version")
-    logger.info(f"🌐 Port: {port}")
-    logger.info(f"✅ All functionality enabled and UI issues fixed")
-    
-    app.run(host='0.0.0.0', port=port, debug=False)
+        logger.
