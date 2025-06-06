@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-Railway deployment entry point - Self-contained Flask app with real image extraction
-"""
 from flask import Flask, request, jsonify, render_template_string
 import os
 import sys
@@ -9,28 +6,297 @@ import json
 import time
 import requests
 import re
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse, urljoin
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-# 簡潔なHTMLテンプレート
+def extract_1688_images(url, max_images=20):
+    """1688商品ページから実際に画像を抽出"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
+        }
+        
+        print(f"🔍 Fetching page: {url}")
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        response.encoding = 'utf-8'
+        
+        print(f"✅ Page loaded successfully, size: {len(response.text)} chars")
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # 商品タイトル抽出
+        title_selectors = [
+            'h1.d-title',
+            '.d-title',
+            'h1',
+            '.product-title',
+            '.offer-title',
+            '[class*="title"]'
+        ]
+        
+        product_title = "1688商品"
+        for selector in title_selectors:
+            title_elem = soup.select_one(selector)
+            if title_elem and title_elem.get_text(strip=True):
+                product_title = title_elem.get_text(strip=True)[:100]
+                break
+        
+        print(f"📋 Product title: {product_title}")
+        
+        # 画像URL抽出 - 複数の方法を試行
+        image_urls = set()
+        
+        # 方法1: img タグから直接抽出
+        img_selectors = [
+            'img[src*="cbu01.alicdn.com"]',
+            'img[src*="sc04.alicdn.com"]', 
+            'img[src*="img.alicdn.com"]',
+            'img[data-src*="alicdn.com"]',
+            'img[data-original*="alicdn.com"]',
+            '.d-pic img',
+            '.main-image img',
+            '.product-image img',
+            '.thumb-pic img',
+            '.detail-gallery img',
+            'img[src*=".jpg"]',
+            'img[src*=".png"]',
+            'img[src*=".webp"]'
+        ]
+        
+        for selector in img_selectors:
+            imgs = soup.select(selector)
+            for img in imgs:
+                src = img.get('src') or img.get('data-src') or img.get('data-original')
+                if src and is_valid_product_image(src):
+                    clean_url = clean_image_url(src)
+                    if clean_url:
+                        image_urls.add(clean_url)
+        
+        # 方法2: JavaScript data から抽出
+        scripts = soup.find_all('script')
+        for script in scripts:
+            if script.string:
+                # JSON data extraction
+                json_matches = re.findall(r'"(https?://[^"]*alicdn\.com[^"]*\.(?:jpg|png|webp)[^"]*)"', script.string)
+                for match in json_matches:
+                    if is_valid_product_image(match):
+                        clean_url = clean_image_url(match)
+                        if clean_url:
+                            image_urls.add(clean_url)
+                
+                # 特定のパターンを抽出
+                patterns = [
+                    r'imgUrl["\']?\s*:\s*["\']([^"\']+)["\']',
+                    r'imageUrl["\']?\s*:\s*["\']([^"\']+)["\']',
+                    r'src["\']?\s*:\s*["\']([^"\']+)["\']',
+                    r'url["\']?\s*:\s*["\']([^"\']*alicdn\.com[^"\']*)["\']'
+                ]
+                
+                for pattern in patterns:
+                    matches = re.findall(pattern, script.string, re.IGNORECASE)
+                    for match in matches:
+                        if is_valid_product_image(match):
+                            clean_url = clean_image_url(match)
+                            if clean_url:
+                                image_urls.add(clean_url)
+        
+        # 方法3: CSS background-image から抽出
+        style_elements = soup.find_all(['div', 'span'], style=True)
+        for elem in style_elements:
+            style = elem.get('style', '')
+            bg_matches = re.findall(r'background-image:\s*url\(["\']?([^"\']*alicdn\.com[^"\']*)["\']?\)', style)
+            for match in bg_matches:
+                if is_valid_product_image(match):
+                    clean_url = clean_image_url(match)
+                    if clean_url:
+                        image_urls.add(clean_url)
+        
+        # 結果を処理
+        image_list = list(image_urls)[:max_images]
+        
+        # 高解像度版に変換
+        enhanced_images = []
+        for i, img_url in enumerate(image_list):
+            high_res_url = enhance_image_quality(img_url)
+            
+            enhanced_images.append({
+                'url': high_res_url,
+                'original_url': img_url,
+                'index': i + 1,
+                'type': classify_image_type(img_url, i),
+                'size': extract_size_from_url(high_res_url)
+            })
+        
+        print(f"🖼️ Found {len(enhanced_images)} images")
+        
+        return {
+            'success': True,
+            'title': product_title,
+            'url': url,
+            'images': enhanced_images,
+            'total_found': len(image_urls),
+            'extracted_count': len(enhanced_images)
+        }
+        
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Request error: {e}")
+        return {'success': False, 'error': f'ページの取得に失敗しました: {str(e)}'}
+    except Exception as e:
+        print(f"❌ Extraction error: {e}")
+        return {'success': False, 'error': f'画像抽出エラー: {str(e)}'}
+
+def is_valid_product_image(url):
+    """商品画像として有効かチェック"""
+    if not url or not isinstance(url, str):
+        return False
+    
+    # 基本的なURL形式チェック
+    if not url.startswith(('http://', 'https://', '//')):
+        return False
+    
+    # アリババCDNドメインチェック
+    valid_domains = ['alicdn.com', '1688.com']
+    if not any(domain in url for domain in valid_domains):
+        return False
+    
+    # 画像形式チェック
+    if not re.search(r'\.(jpg|jpeg|png|webp)', url, re.IGNORECASE):
+        return False
+    
+    # 除外パターン
+    exclude_patterns = [
+        'favicon', 'logo', 'icon', 'placeholder', 'loading',
+        '1x1', 'pixel', 'transparent', 'blank', 'empty',
+        'avatar', 'head', 'profile', 'watermark'
+    ]
+    
+    url_lower = url.lower()
+    if any(pattern in url_lower for pattern in exclude_patterns):
+        return False
+    
+    # サイズフィルター（非常に小さい画像を除外）
+    size_patterns = re.findall(r'(\d+)x(\d+)', url)
+    for width, height in size_patterns:
+        if int(width) < 50 or int(height) < 50:
+            return False
+    
+    return True
+
+def clean_image_url(url):
+    """画像URLをクリーンアップ"""
+    if not url:
+        return None
+    
+    # プロトコル修正
+    if url.startswith('//'):
+        url = 'https:' + url
+    
+    # URLデコード
+    url = url.replace('\\', '')
+    
+    # 余分なパラメータ削除
+    if '?' in url:
+        base_url, params = url.split('?', 1)
+        # 重要なパラメータのみ保持
+        important_params = []
+        for param in params.split('&'):
+            if any(keep in param.lower() for keep in ['width', 'height', 'quality', 'format']):
+                important_params.append(param)
+        
+        if important_params:
+            url = base_url + '?' + '&'.join(important_params)
+        else:
+            url = base_url
+    
+    return url
+
+def enhance_image_quality(url):
+    """画像URLを高品質版に変換"""
+    if not url:
+        return url
+    
+    # アリババCDNの画像品質向上パターン
+    quality_transformations = [
+        # 低解像度を高解像度に変換
+        (r'_50x50\.', '_400x400.'),
+        (r'_100x100\.', '_400x400.'),
+        (r'_200x200\.', '_400x400.'),
+        (r'_220x220\.', '_400x400.'),
+        (r'summ\.jpg', '400x400.jpg'),
+        (r'\.jpg_\d+x\d+\.jpg', '.jpg'),
+        
+        # 品質パラメータ改善
+        (r'\.jpg_.*', '.jpg'),
+        (r'\.png_.*', '.png'),
+        (r'\.webp_.*', '.webp'),
+    ]
+    
+    enhanced_url = url
+    for pattern, replacement in quality_transformations:
+        enhanced_url = re.sub(pattern, replacement, enhanced_url)
+    
+    # 最大解像度を指定（可能な場合）
+    if 'alicdn.com' in enhanced_url and not re.search(r'\d+x\d+', enhanced_url):
+        if enhanced_url.endswith(('.jpg', '.jpeg')):
+            enhanced_url = enhanced_url.replace('.jpg', '_800x800.jpg')
+        elif enhanced_url.endswith('.png'):
+            enhanced_url = enhanced_url.replace('.png', '_800x800.png')
+    
+    return enhanced_url
+
+def classify_image_type(url, index):
+    """画像の種類を分類"""
+    url_lower = url.lower()
+    
+    if any(keyword in url_lower for keyword in ['main', 'primary', 'hero']):
+        return 'メイン画像'
+    elif any(keyword in url_lower for keyword in ['detail', 'zoom', 'large']):
+        return '詳細画像'
+    elif any(keyword in url_lower for keyword in ['thumb', 'small', 'mini']):
+        return 'サムネイル'
+    elif index < 3:
+        return 'メイン画像'
+    elif index < 8:
+        return '詳細画像'
+    else:
+        return 'その他'
+
+def extract_size_from_url(url):
+    """URLからサイズ情報を抽出"""
+    size_match = re.search(r'(\d+)x(\d+)', url)
+    if size_match:
+        return f"{size_match.group(1)}x{size_match.group(2)}"
+    return "不明"
+
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚀 1688 商品画像抽出ツール - 完全版</title>
+    <title>🚀 1688 商品画像抽出ツール - 実際抽出対応</title>
     <style>
         body { 
-            font-family: 'Segoe UI', Arial, sans-serif; 
+            font-family: Arial, sans-serif; 
             margin: 0; 
             padding: 20px; 
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
         }
         .container { 
-            max-width: 1000px; 
+            max-width: 1200px; 
             margin: 0 auto; 
             background: white; 
             padding: 30px; 
@@ -41,7 +307,6 @@ HTML_TEMPLATE = '''
             color: #333; 
             text-align: center; 
             margin-bottom: 30px;
-            font-size: 2.5em;
         }
         .success-banner {
             background: linear-gradient(45deg, #28a745, #20c997);
@@ -51,31 +316,21 @@ HTML_TEMPLATE = '''
             margin-bottom: 25px;
             text-align: center;
             font-weight: bold;
-            font-size: 18px;
         }
-        .features {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin: 30px 0;
+        .improvement-notice {
+            background: linear-gradient(45deg, #ffc107, #ff8c00);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
         }
         .feature-card {
-            background: linear-gradient(45deg, #f8f9fa, #e9ecef);
+            background: #f8f9fa;
             padding: 20px;
             border-radius: 12px;
-            text-align: center;
-            border: 2px solid #dee2e6;
-        }
-        .feature-icon {
-            font-size: 48px;
-            margin-bottom: 15px;
-        }
-        .demo-section {
-            background: #fff3cd;
-            padding: 25px;
-            border-radius: 12px;
-            border-left: 5px solid #ffc107;
-            margin: 30px 0;
+            margin: 15px 0;
+            border-left: 4px solid #667eea;
         }
         .form-group { 
             margin-bottom: 20px; 
@@ -103,69 +358,112 @@ HTML_TEMPLATE = '''
             font-size: 18px; 
             cursor: pointer; 
             width: 100%;
+            transition: all 0.3s;
         }
-        button:hover { 
-            transform: translateY(-2px); 
+        button:hover {
+            transform: translateY(-2px);
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
         }
         .result { 
             margin-top: 30px; 
             padding: 20px; 
             background: #f8f9fa; 
-            border-radius: 8px; 
-            border-left: 4px solid #667eea;
+            border-radius: 8px;
+        }
+        .stats-panel {
+            background: linear-gradient(45deg, #17a2b8, #007bff);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-around;
+            text-align: center;
+        }
+        .stat-item h3 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .stat-item p {
+            margin: 5px 0 0;
+            opacity: 0.9;
         }
         .image-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-            gap: 15px;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 20px;
             margin-top: 20px;
         }
         .image-item {
             background: white;
             border-radius: 12px;
             overflow: hidden;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            transition: all 0.3s ease;
-            cursor: pointer;
+            box-shadow: 0 6px 12px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+            position: relative;
         }
         .image-item:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+            transform: translateY(-8px);
+            box-shadow: 0 12px 24px rgba(0,0,0,0.2);
         }
         .image-item img {
             width: 100%;
-            height: 140px;
+            height: 180px;
             object-fit: cover;
-            background: #f8f9fa;
+            cursor: pointer;
+        }
+        .image-overlay {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
         }
         .image-info {
-            padding: 12px;
-            font-size: 13px;
-            background: #fff;
+            padding: 15px;
         }
-        .image-info strong {
+        .image-info h4 {
+            margin: 0 0 8px 0;
             color: #333;
-            display: block;
-            margin-bottom: 4px;
+            font-size: 16px;
         }
-        .image-size {
+        .image-info p {
+            margin: 4px 0;
             color: #666;
-            font-size: 11px;
+            font-size: 13px;
+        }
+        .download-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 8px;
+        }
+        .download-btn:hover {
+            background: #218838;
         }
         .loading {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 20px;
-            background: #e3f2fd;
-            border-radius: 8px;
-            color: #1976d2;
+            text-align: center;
+            padding: 40px;
         }
-        .spinner {
-            width: 20px;
-            height: 20px;
-            border: 2px solid #e3f2fd;
-            border-top: 2px solid #1976d2;
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
             border-radius: 50%;
             animation: spin 1s linear infinite;
         }
@@ -173,165 +471,183 @@ HTML_TEMPLATE = '''
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        .error-message {
-            background: #ffebee;
-            color: #c62828;
+        .error-box {
+            background: #f8d7da;
+            color: #721c24;
             padding: 15px;
             border-radius: 8px;
-            border-left: 4px solid #f44336;
+            border: 1px solid #f5c6cb;
+        }
+        .success-box {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #c3e6cb;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="success-banner">
-            ✅ Railway デプロイ成功！1688 AI画像抽出ツール稼働中
+            ✅ 実際の1688画像スクレイピング機能搭載！
         </div>
         
-        <h1>🚀 1688 商品画像抽出・AI分析ツール</h1>
-        
-        <div class="features">
-            <div class="feature-card">
-                <div class="feature-icon">🖼️</div>
-                <h3>画像自動抽出</h3>
-                <p>1688商品ページから高解像度画像を自動抽出</p>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">🤖</div>
-                <h3>AI画像分析</h3>
-                <p>OpenAI GPT-4 Visionによる高精度分析</p>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">📁</div>
-                <h3>スマート分類</h3>
-                <p>色・カテゴリ別自動フォルダ分類</p>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">💾</div>
-                <h3>一括ダウンロード</h3>
-                <p>整理された画像の一括取得</p>
-            </div>
+        <div class="improvement-notice">
+            🔥 改良完了！任意の1688商品URLから実際の画像を抽出できます
         </div>
         
-        <div class="demo-section">
-            <h3>🎯 AI画像抽出・分析デモ</h3>
-            <p><strong>現在稼働中:</strong> Railway クラウドプラットフォーム</p>
-            <p><strong>AI機能:</strong> <span id="aiStatus">確認中...</span></p>
+        <h1>🚀 1688 商品画像抽出ツール - 実際抽出版</h1>
+        
+        <div class="feature-card">
+            <h3>🎯 新機能・改良点</h3>
+            <ul>
+                <li>✅ 実際の1688商品ページからの画像スクレイピング</li>
+                <li>✅ 複数の抽出方法（img タグ、JavaScript、CSS）</li>
+                <li>✅ 自動高解像度化（800x800まで対応）</li>
+                <li>✅ 画像品質フィルタリング</li>
+                <li>✅ リアルタイム処理状況表示</li>
+                <li>✅ 詳細な統計情報</li>
+            </ul>
         </div>
         
         <form id="extractForm">
             <div class="form-group">
                 <label>🔗 1688商品URL:</label>
-                <input type="url" id="productUrl" value="https://detail.1688.com/offer/123456789.html" required>
+                <input type="url" id="productUrl" 
+                       placeholder="https://detail.1688.com/offer/806521859635.html?..." 
+                       value="https://detail.1688.com/offer/806521859635.html"
+                       required>
+                <small style="color: #666;">例: detail.1688.com/offer/任意の商品ID</small>
             </div>
             
             <div style="display: flex; gap: 20px;">
                 <div class="form-group" style="flex: 1;">
                     <label>📊 最大抽出枚数:</label>
-                    <input type="number" id="maxImages" value="8" min="1" max="20">
+                    <input type="number" id="maxImages" value="15" min="1" max="50">
                 </div>
                 <div class="form-group" style="flex: 1;">
-                    <label>🤖 分析モード:</label>
-                    <select id="analysisMode">
-                        <option value="demo">デモ分析</option>
-                        <option value="full">完全AI分析</option>
+                    <label>🖼️ 画質設定:</label>
+                    <select id="quality">
+                        <option value="high">高画質（800x800）</option>
+                        <option value="medium">中画質（400x400）</option>
+                        <option value="original">オリジナル</option>
                     </select>
                 </div>
             </div>
             
-            <div class="form-group">
-                <label>📝 AI分析指示:</label>
-                <textarea id="instructions" rows="3" placeholder="例: 色別に分類し、商品の特徴も分析してください">この商品画像を色別（赤、青、緑など）に分類し、商品の種類と特徴も分析してください。</textarea>
-            </div>
-            
-            <button type="submit">🚀 AI画像抽出・分析開始</button>
+            <button type="submit" id="submitBtn">🚀 実際の画像を抽出開始</button>
         </form>
         
         <div id="result" class="result" style="display:none;">
-            <h3>📊 抽出・分析結果</h3>
+            <h3>📊 抽出結果</h3>
             <div id="resultContent"></div>
         </div>
     </div>
 
     <script>
-        // AI status check
-        fetch('/ai-status')
-            .then(r => r.json())
-            .then(data => {
-                document.getElementById('aiStatus').textContent = 
-                    data.enabled ? 'OpenAI GPT-4 Vision 利用可能' : 'デモモード (APIキー未設定)';
-            });
-
         document.getElementById('extractForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
-            const url = document.getElementById('productUrl').value;
-            const maxImages = document.getElementById('maxImages').value;
-            const mode = document.getElementById('analysisMode').value;
-            const instructions = document.getElementById('instructions').value;
-            
+            const url = document.getElementById('productUrl').value.trim();
+            const maxImages = parseInt(document.getElementById('maxImages').value);
+            const quality = document.getElementById('quality').value;
+            const submitBtn = document.getElementById('submitBtn');
             const resultDiv = document.getElementById('result');
             const resultContent = document.getElementById('resultContent');
             
-            // ローディング表示
-            resultContent.innerHTML = `
-                <div class="loading">
-                    <div class="spinner"></div>
-                    <span>🔄 1688サイトから画像を抽出中...</span>
-                </div>
-            `;
+            // 1688 URL validation
+            if (!url.includes('1688.com')) {
+                alert('1688.comのURLを入力してください');
+                return;
+            }
+            
+            // UI更新
+            submitBtn.disabled = true;
+            submitBtn.textContent = '🔄 抽出中...';
             resultDiv.style.display = 'block';
+            resultContent.innerHTML = '<div class="loading">実際の1688ページから画像を抽出中...</div>';
             
             try {
-                const response = await fetch('/extract', {
+                console.log('Starting extraction for:', url);
+                
+                const response = await fetch('/extract-real', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({url, max_images: maxImages, mode, instructions})
+                    body: JSON.stringify({
+                        url: url,
+                        max_images: maxImages,
+                        quality: quality
+                    })
                 });
                 
                 const data = await response.json();
+                console.log('Response:', data);
                 
-                if (data.success) {
-                    let html = `
-                        <div style="background: #d4edda; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-                            ✅ ${data.message}
-                        </div>
-                        <h4>🖼️ 抽出画像一覧 (${data.images?.length || 0}枚)</h4>
-                        <div class="image-grid">
-                    `;
-                    
-                    (data.images || []).forEach((img, i) => {
-                        html += `
-                            <div class="image-item" onclick="window.open('${img.url}', '_blank')">
-                                <img src="${img.url}" alt="商品画像 ${i+1}" 
-                                     onerror="this.style.background='#f5f5f5'; this.alt='画像読み込みエラー';"
-                                     loading="lazy">
-                                <div class="image-info">
-                                    <strong>画像 ${i+1}</strong>
-                                    <div class="image-size">${img.size || '解像度確認中'}</div>
-                                    ${img.analysis ? `<div style="margin-top:5px; color:#666;">分析: ${img.analysis.category || '商品画像'}</div>` : ''}
-                                </div>
-                            </div>
-                        `;
-                    });
-                    
-                    html += '</div>';
-                    resultContent.innerHTML = html;
+                if (data.success && data.images && data.images.length > 0) {
+                    displayResults(data);
                 } else {
-                    resultContent.innerHTML = `
-                        <div class="error-message">
-                            ❌ ${data.error}
-                            <br><small>ヒント: 有効な1688商品URLを入力してください</small>
-                        </div>
-                    `;
+                    resultContent.innerHTML = '<div class="error-box">❌ ' + (data.error || '画像が見つかりませんでした') + '</div>';
                 }
+                
             } catch (error) {
-                resultContent.innerHTML = `
-                    <div class="error-message">
-                        ❌ 通信エラー: ${error.message}
-                        <br><small>ネットワーク接続を確認してください</small>
-                    </div>
-                `;
+                console.error('Error:', error);
+                resultContent.innerHTML = '<div class="error-box">❌ 抽出エラー: ' + error.message + '</div>';
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = '🚀 実際の画像を抽出開始';
+            }
+        });
+        
+        function displayResults(data) {
+            const resultContent = document.getElementById('resultContent');
+            
+            let html = '<div class="success-box">✅ ' + data.extracted_count + '枚の画像を抽出しました</div>';
+            
+            // 統計パネル
+            html += '<div class="stats-panel">';
+            html += '<div class="stat-item"><h3>' + data.extracted_count + '</h3><p>抽出成功</p></div>';
+            html += '<div class="stat-item"><h3>' + data.total_found + '</h3><p>発見総数</p></div>';
+            html += '<div class="stat-item"><h3>' + (data.title ? data.title.substring(0, 15) + '...' : 'N/A') + '</h3><p>商品名</p></div>';
+            html += '</div>';
+            
+            // 画像グリッド
+            html += '<div class="image-grid">';
+            
+            data.images.forEach((img, index) => {
+                html += '<div class="image-item">';
+                html += '<img src="' + img.url + '" alt="商品画像 ' + (index + 1) + '" ';
+                html += 'onclick="window.open(\'' + img.url + '\', \'_blank\')" ';
+                html += 'onerror="this.style.display=\'none\'">';
+                html += '<div class="image-overlay">' + img.type + '</div>';
+                html += '<div class="image-info">';
+                html += '<h4>画像 ' + img.index + '</h4>';
+                html += '<p>種類: ' + img.type + '</p>';
+                html += '<p>サイズ: ' + img.size + '</p>';
+                html += '<button class="download-btn" onclick="downloadImage(\'' + img.url + '\', \'1688_image_' + img.index + '\')">💾 ダウンロード</button>';
+                html += '</div></div>';
+            });
+            
+            html += '</div>';
+            
+            resultContent.innerHTML = html;
+        }
+        
+        function downloadImage(url, filename) {
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename + '.jpg';
+            link.target = '_blank';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        
+        // サンプルURL設定
+        document.addEventListener('DOMContentLoaded', () => {
+            const urlInput = document.getElementById('productUrl');
+            if (!urlInput.value) {
+                urlInput.value = 'https://detail.1688.com/offer/806521859635.html';
             }
         });
     </script>
@@ -339,168 +655,63 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
-def extract_1688_images(url, max_images=8):
-    """1688商品ページから実際の画像URLを抽出"""
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-        }
-        
-        # 1688商品ページを取得
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        html_content = response.text
-        
-        # 画像URLパターンを検索
-        image_patterns = [
-            r'https://cbu01\.alicdn\.com/img/ibank/[^"]+\.jpg',
-            r'https://cbu01\.alicdn\.com/img/ibank/[^"]+\.jpeg',
-            r'https://sc04\.alicdn\.com/kf/[^"]+\.jpg',
-            r'https://sc04\.alicdn\.com/kf/[^"]+\.jpeg',
-            r'https://img\.alicdn\.com/imgextra/[^"]+\.jpg',
-            r'https://img\.alicdn\.com/imgextra/[^"]+\.jpeg',
-        ]
-        
-        found_images = []
-        
-        # 各パターンで画像URLを検索
-        for pattern in image_patterns:
-            matches = re.findall(pattern, html_content)
-            for match in matches:
-                if match not in found_images:
-                    found_images.append(match)
-        
-        # 重複削除と最大枚数制限
-        unique_images = list(dict.fromkeys(found_images))[:max_images]
-        
-        # 画像情報を構築
-        images = []
-        for i, img_url in enumerate(unique_images):
-            # 高解像度版のURLに変換
-            high_res_url = img_url.replace('_50x50.jpg', '_400x400.jpg').replace('_60x60.jpg', '_400x400.jpg')
-            
-            images.append({
-                'url': high_res_url,
-                'original_url': img_url,
-                'size': '400x400 (推定)',
-                'analysis': {
-                    'category': '商品画像',
-                    'type': 'product_photo',
-                    'index': i + 1
-                }
-            })
-        
-        return images
-        
-    except requests.RequestException as e:
-        # ネットワークエラーの場合、サンプル画像を返す
-        print(f"Network error: {e}")
-        return get_sample_images(max_images)
-    except Exception as e:
-        print(f"Error extracting images: {e}")
-        return get_sample_images(max_images)
-
-def get_sample_images(max_images=8):
-    """サンプル商品画像を生成（実際の抽出ができない場合のフォールバック）"""
-    sample_urls = [
-        'https://img.alicdn.com/imgextra/i4/2208857268770/O1CN01YXRFz41rM2MqKpJVz_!!2208857268770.jpg',
-        'https://img.alicdn.com/imgextra/i1/2208857268770/O1CN01xWJOBV1rM2MqKpJVz_!!2208857268770.jpg',
-        'https://cbu01.alicdn.com/img/ibank/2019/187/284/11878482781_1965013799.jpg',
-        'https://cbu01.alicdn.com/img/ibank/2019/187/284/11878482782_1965013799.jpg',
-        'https://sc04.alicdn.com/kf/H8b2e4c4e77a44b6b8c6f1e8e8a4f6b8e.jpg',
-        'https://sc04.alicdn.com/kf/H9b2e4c4e77a44b6b8c6f1e8e8a4f6b8e.jpg',
-        'https://img.alicdn.com/imgextra/i2/2208857268770/O1CN01zWJOBV1rM2MqKpJVz_!!2208857268770.jpg',
-        'https://img.alicdn.com/imgextra/i3/2208857268770/O1CN01yWJOBV1rM2MqKpJVz_!!2208857268770.jpg',
-    ]
-    
-    images = []
-    for i in range(min(max_images, len(sample_urls))):
-        images.append({
-            'url': sample_urls[i],
-            'size': '400x400',
-            'analysis': {
-                'category': 'サンプル商品',
-                'type': 'sample_image',
-                'index': i + 1
-            }
-        })
-    
-    return images
-
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/ai-status')
-def ai_status():
-    api_key = os.getenv('OPENAI_API_KEY')
-    return jsonify({
-        'enabled': bool(api_key and api_key.startswith('sk-')),
-        'status': 'Railway deployment successful',
-        'extraction': 'Real 1688 image extraction enabled'
-    })
-
-@app.route('/extract', methods=['POST'])
-def extract():
+@app.route('/extract-real', methods=['POST'])
+def extract_real():
+    """実際の1688画像抽出API"""
     try:
         data = request.get_json()
-        url = data.get('url')
-        max_images = int(data.get('max_images', 8))
-        mode = data.get('mode', 'demo')
-        instructions = data.get('instructions', '')
+        url = data.get('url', '').strip()
+        max_images = int(data.get('max_images', 15))
+        quality = data.get('quality', 'high')
         
-        # 1688 URLの検証
-        if not url or '1688.com' not in url:
+        if not url:
+            return jsonify({'success': False, 'error': 'URLが必要です'})
+        
+        if '1688.com' not in url:
+            return jsonify({'success': False, 'error': '1688.comのURLを入力してください'})
+        
+        print(f"🚀 Starting real extraction for: {url}")
+        
+        # 実際の画像抽出実行
+        result = extract_1688_images(url, max_images)
+        
+        if result['success']:
             return jsonify({
-                'success': False, 
-                'error': '有効な1688商品URLを入力してください (例: https://detail.1688.com/offer/123456789.html)'
+                'success': True,
+                'title': result['title'],
+                'url': result['url'],
+                'images': result['images'],
+                'total_found': result['total_found'],
+                'extracted_count': result['extracted_count'],
+                'quality': quality
             })
-        
-        # 実際の画像抽出を実行
-        images = extract_1688_images(url, max_images)
-        
-        if not images:
-            return jsonify({
-                'success': False,
-                'error': '画像を抽出できませんでした。URLを確認してください。'
-            })
-        
-        return jsonify({
-            'success': True,
-            'message': f'1688商品ページから{len(images)}枚の画像を抽出しました',
-            'images': images,
-            'mode': mode,
-            'url': url,
-            'instructions': instructions,
-            'extraction_method': 'real_1688_scraping'
-        })
+        else:
+            return jsonify(result)
         
     except Exception as e:
+        print(f"❌ API Error: {e}")
         return jsonify({
             'success': False, 
-            'error': f'画像抽出エラー: {str(e)}'
+            'error': f'サーバーエラー: {str(e)}'
         })
 
 @app.route('/health')
 def health():
     return jsonify({
         'status': 'healthy',
-        'app': '1688 Photos Organizer',
-        'version': '2.2.0',
-        'platform': 'Railway',
-        'features': ['real_image_extraction', 'ai_analysis', 'smart_classification']
+        'app': '1688 Photos Organizer - Real Extraction',
+        'version': '3.0.0',
+        'features': ['real_scraping', 'image_enhancement', 'quality_filtering']
     })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"🚀 Starting 1688 Photos Organizer on Railway")
+    print(f"🚀 Starting 1688 Real Image Extractor")
     print(f"🌐 Port: {port}")
-    print(f"✅ Real image extraction enabled")
-    print(f"🖼️ Enhanced UI with compact image display")
+    print(f"✅ Real scraping functionality enabled")
     
     app.run(host='0.0.0.0', port=port, debug=False)
