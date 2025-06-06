@@ -1,5 +1,3 @@
-# main.pyを自己完結型に修正
-cat > main.py << 'EOF'
 #!/usr/bin/env python3
 """
 Railway deployment entry point - Self-contained Flask app
@@ -344,4 +342,3 @@ if __name__ == '__main__':
     print(f"✅ Self-contained Flask app ready")
     
     app.run(host='0.0.0.0', port=port, debug=False)
-EOF
