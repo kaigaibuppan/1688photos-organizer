@@ -8,8 +8,13 @@ import requests
 import re
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
+import logging
 
 app = Flask(__name__)
+
+# ロギング設定
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def extract_1688_images(url, max_images=20):
     """1688商品ページから実際に画像を抽出"""
@@ -27,12 +32,12 @@ def extract_1688_images(url, max_images=20):
             'Cache-Control': 'max-age=0'
         }
         
-        print(f"🔍 Fetching page: {url}")
+        logger.info(f"🔍 Fetching page: {url}")
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         response.encoding = 'utf-8'
         
-        print(f"✅ Page loaded successfully, size: {len(response.text)} chars")
+        logger.info(f"✅ Page loaded successfully, size: {len(response.text)} chars")
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
@@ -53,7 +58,7 @@ def extract_1688_images(url, max_images=20):
                 product_title = title_elem.get_text(strip=True)[:100]
                 break
         
-        print(f"📋 Product title: {product_title}")
+        logger.info(f"📋 Product title: {product_title}")
         
         # 画像URL抽出 - 複数の方法を試行
         image_urls = set()
@@ -139,7 +144,7 @@ def extract_1688_images(url, max_images=20):
                 'size': extract_size_from_url(high_res_url)
             })
         
-        print(f"🖼️ Found {len(enhanced_images)} images")
+        logger.info(f"🖼️ Found {len(enhanced_images)} images")
         
         return {
             'success': True,
@@ -151,10 +156,10 @@ def extract_1688_images(url, max_images=20):
         }
         
     except requests.exceptions.RequestException as e:
-        print(f"❌ Request error: {e}")
+        logger.error(f"❌ Request error: {e}")
         return {'success': False, 'error': f'ページの取得に失敗しました: {str(e)}'}
     except Exception as e:
-        print(f"❌ Extraction error: {e}")
+        logger.error(f"❌ Extraction error: {e}")
         return {'success': False, 'error': f'画像抽出エラー: {str(e)}'}
 
 def is_valid_product_image(url):
@@ -674,7 +679,7 @@ def extract_real():
         if '1688.com' not in url:
             return jsonify({'success': False, 'error': '1688.comのURLを入力してください'})
         
-        print(f"🚀 Starting real extraction for: {url}")
+        logger.info(f"🚀 Starting real extraction for: {url}")
         
         # 実際の画像抽出実行
         result = extract_1688_images(url, max_images)
@@ -693,7 +698,7 @@ def extract_real():
             return jsonify(result)
         
     except Exception as e:
-        print(f"❌ API Error: {e}")
+        logger.error(f"❌ API Error: {e}")
         return jsonify({
             'success': False, 
             'error': f'サーバーエラー: {str(e)}'
@@ -709,9 +714,11 @@ def health():
     })
 
 if __name__ == '__main__':
+    # Railway用のポート設定
     port = int(os.environ.get('PORT', 5000))
-    print(f"🚀 Starting 1688 Real Image Extractor")
-    print(f"🌐 Port: {port}")
-    print(f"✅ Real scraping functionality enabled")
+    
+    logger.info(f"🚀 Starting 1688 Real Image Extractor")
+    logger.info(f"🌐 Port: {port}")
+    logger.info(f"✅ Real scraping functionality enabled")
     
     app.run(host='0.0.0.0', port=port, debug=False)
